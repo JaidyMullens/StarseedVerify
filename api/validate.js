@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const PAYPAL_BASE =
   process.env.PAYPAL_BASE || "https://api-m.paypal.com"; // sandbox: https://api-m.sandbox.paypal.com
 const PAYPAL_CLIENT = process.env.PAYPAL_CLIENT;
