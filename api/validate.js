@@ -1,5 +1,6 @@
-const PAYPAL_BASE =
-  process.env.PAYPAL_BASE || "https://api-m.paypal.com"; // sandbox: https://api-m.sandbox.paypal.com
+import fetch from "node-fetch";
+
+const PAYPAL_BASE = process.env.PAYPAL_BASE || "https://api-m.paypal.com";
 const PAYPAL_CLIENT = process.env.PAYPAL_CLIENT;
 const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
 
@@ -19,9 +20,19 @@ async function getAccessToken() {
 }
 
 export default async function handler(req, res) {
+  // Allow CORS
+  res.setHeader("Access-Control-Allow-Origin", "https://starseed-soul-typology-cd638a.webflow.io");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end(); // Handle preflight CORS check
+  }
+
   const orderId = req.query.order_id;
-  if (!orderId)
+  if (!orderId) {
     return res.status(400).json({ valid: false, error: "Missing order_id" });
+  }
 
   try {
     const token = await getAccessToken();
@@ -30,11 +41,7 @@ export default async function handler(req, res) {
     });
     const order = await r.json();
 
-    if (
-      order.status === "COMPLETED" ||
-      order.status === "CAPTURED" ||
-      order.status === "APPROVED"
-    ) {
+    if (["COMPLETED", "CAPTURED", "APPROVED"].includes(order.status)) {
       res.json({ valid: true, order_id: orderId });
     } else {
       res.json({ valid: false, status: order.status });
