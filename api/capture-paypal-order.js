@@ -7,7 +7,7 @@ import fetch from 'node-fetch';
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
 const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
 // IMPORTANT: Switch to 'https://api-m.paypal.com' for production
-const PAYPAL_API_BASE = 'https://api-m.sandbox.paypal.com'; 
+const PAYPAL_API_BASE = 'https://api-m.paypal.com'; 
 
 // --- Access Token Utility ---
 async function generateAccessToken() {
@@ -15,7 +15,7 @@ async function generateAccessToken() {
         throw new Error("Missing PayPal credentials in environment variables.");
     }
 
-    const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString('base664');
+    const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString('base64');
     
     const tokenResponse = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
         method: 'POST',
