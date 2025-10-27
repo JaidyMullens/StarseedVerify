@@ -2,12 +2,29 @@
 
 import fetch from "node-fetch";
 
-const PAYPAL_BASE = "https://api-m.paypal.com"; // Set as Vercel ENV var: PAYPAL_BASE
-const PAYPAL_CLIENT = "Ae0CbDUug6eqn7xSiuVdSLnwutrxumvJoGRgpIY9C50D8pQN-IU6K38bHm6lu8C4GaLcRjN2JIkUOc-1"; // Set as Vercel ENV var: PAYPAL_CLIENT
-const PAYPAL_SECRET = "EOev7GeGeEKwV1EGNMUAvgDPfSPQPgyy-nxYxC-orD7lWRZfDKCe1ZQbknpK4YtnG4mSeAWkCCR9Hdc0"; // Set as Vercel ENV var: PAYPAL_SECRET
+// --- GLOBAL CACHE VARIABLES ---
+// These global variables will persist across "hot" Vercel function invocations, 
+// dramatically speeding up token retrieval.
+let cachedToken = null;
+let tokenExpiry = 0; // Unix timestamp when the current token expires
+// --- END GLOBAL CACHE VARIABLES ---
+
+// NOTE: I am keeping these values hardcoded here for review, 
+// but in a live environment, they MUST be set as Vercel Environment Variables.
+const PAYPAL_BASE = "https://api-m.paypal.com"; 
+const PAYPAL_CLIENT = process.env.PAYPAL_CLIENT || "Ae0CbDUug6eqn7xSiuVdSLnwutrxumvJoGRgpIY9C50D8pQN-IU6K38bHm6lu8C4GaLcRjN2JIkUOc-1"; 
+const PAYPAL_SECRET = process.env.PAYPAL_SECRET || "EOev7GeGeEKwV1EGNMUAvgDPfSPQPgyy-nxYxC-orD7lWRZfDKCe1ZQbknpK4YtnG4mSeAWkCCR9Hdc0"; 
 
 async function getAccessToken() {
-    // ... (same getAccessToken function as above)
+    // 1. CHECK CACHE: If token is present AND not expired, return it instantly (FIX)
+    if (cachedToken && Date.now() < tokenExpiry) {
+        console.log("Using cached PayPal access token.");
+        return cachedToken;
+    }
+
+    // 2. FETCH NEW TOKEN: If expired or missing, make the slow network call
+    console.log("Fetching new PayPal access token...");
+    
     const res = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
         method: "POST",
         headers: {
@@ -18,12 +35,25 @@ async function getAccessToken() {
         },
         body: "grant_type=client_credentials",
     });
+    
+    // Check for success status before parsing JSON
+    if (!res.ok) {
+        throw new Error(`Failed to retrieve access token: ${res.status} ${res.statusText}`);
+    }
+
     const data = await res.json();
-    return data.access_token;
+    
+    // 3. UPDATE CACHE: Store the new token and set a new expiry time (FIX)
+    const expiresInMs = data.expires_in * 1000;
+    // Set expiry a little early (e.g., 5 seconds early) to be safe
+    tokenExpiry = Date.now() + expiresInMs - 5000; 
+    cachedToken = data.access_token;
+    
+    return cachedToken;
 }
 
 export default async function handler(req, res) {
-    // Allow CORS for your Webflow site
+    // Standard CORS headers
     res.setHeader("Access-Control-Allow-Origin", "https://starseed-soul-typology-cd638a.webflow.io");
     res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -33,15 +63,17 @@ export default async function handler(req, res) {
     }
 
     try {
-        // Note: The orderID is expected in the request body from the client
         const { orderID } = req.body; 
 
         if (!orderID) {
             return res.status(400).json({ error: "Missing orderID" });
         }
 
-        const token = await getAccessToken();
+        // --- OPTIMIZATION HERE: Token is cached or fetched instantly ---
+        const token = await getAccessToken(); 
+        // -----------------------------------------------------------------
 
+        // 1. Capture the order
         const response = await fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderID}/capture`, {
             method: "POST",
             headers: {
@@ -50,13 +82,15 @@ export default async function handler(req, res) {
             },
         });
 
+        // 2. Return the response to the client
         const order = await response.json();
         
-        // **Optional:** Log or save the completed transaction details here.
-
-        res.status(response.status).json(order);
+        // Use 200 for success cases in PayPal interactions unless a resource was truly created
+        // (the resource was created earlier in createOrder).
+        res.status(200).json(order); 
+        
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Failed to capture PayPal order." });
+        console.error("CAPTURE ERROR:", err);
+        res.status(500).json({ error: "Failed to capture PayPal order.", details: err.message });
     }
 }
