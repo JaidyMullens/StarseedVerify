@@ -39,7 +39,7 @@ export default async function handler(req, res) {
       purchase_units: [{
         amount: {
           currency_code: "USD", // Update this if needed (e.g., EUR)
-          value: "11.11",       // Update this to your product price
+          value: "0.11",       // Update this to your product price
         },
       }],
       application_context: {
