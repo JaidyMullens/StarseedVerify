@@ -1,142 +1,115 @@
-import fetch from 'node-fetch';
+// Vercel Serverless Function: /api/capture-paypal-order
+// This script handles the server-side PayPal Capture API call and status check.
 
-const { PAYPAL_CLIENT_ID, PAYPAL_SECRET, PAYPAL_API_BASE } = process.env;
+const fetch = require('node-fetch');
 
-/**
- * Executes a fetch request with retries for API communication.
- * @param {string} url - The API endpoint URL.
- * @param {object} options - Fetch request options.
- * @returns {Promise<object>} The JSON response body.
- */
-async function fetchWithRetry(url, options = {}, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch(url, options);
-      const data = await response.json();
-      
-      if (response.ok) {
-        return data;
-      } else {
-        // If the response is not OK, throw an error with more detail
-        const errorMessage = `PayPal API Error: ${response.status} ${response.statusText} - ${JSON.stringify(data)}`;
-        console.error(errorMessage);
-        // Only retry if it's a specific, transient error (e.g., a server-side timeout)
-        // For 4xx errors (like 401 or 400), don't retry.
-        if (response.status < 500 || i === retries - 1) {
-            throw new Error(errorMessage);
-        }
-      }
-    } catch (error) {
-      console.error(`Fetch attempt ${i + 1} failed: ${error.message}`);
-      if (i === retries - 1) {
-        throw error;
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+// --- Configuration ---
+// These MUST be set as environment variables on your Vercel deployment.
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
+// IMPORTANT: Use 'https://api-m.paypal.com' for production
+const PAYPAL_API_BASE = 'https://api-m.sandbox.paypal.com'; 
+
+// --- Access Token Utility ---
+async function generateAccessToken() {
+    if (!PAYPAL_CLIENT_ID || !PAYPAL_SECRET) {
+        throw new Error("Missing PayPal credentials in environment variables.");
     }
-  }
-}
 
-/**
- * Generates an access token for PayPal API requests.
- * @returns {Promise<string>} The access token string.
- */
-async function getAccessToken() {
-  console.log('Attempting to get PayPal Access Token...');
-  const url = `${PAYPAL_API_BASE}/v1/oauth2/token`;
-  const credentials = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString('base64');
-
-  const data = await fetchWithRetry(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${credentials}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: 'grant_type=client_credentials',
-  });
-
-  console.log('Successfully retrieved Access Token.');
-  return data.access_token;
-}
-
-/**
- * Captures the authorized PayPal order.
- * @param {string} orderId - The PayPal order ID.
- * @param {string} accessToken - The OAuth2 access token.
- * @returns {Promise<object>} The capture result data.
- */
-async function captureOrder(orderId, accessToken) {
-  console.log(`Attempting to capture order: ${orderId}`);
-  const url = `${PAYPAL_API_BASE}/v2/checkout/orders/${orderId}/capture`;
-
-  const data = await fetchWithRetry(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=representation',
-    },
-    // No body needed for the capture endpoint
-  });
-
-  console.log(`Order ${orderId} captured successfully.`);
-  return data;
-}
-
-
-/**
- * The main Vercel serverless function handler.
- */
-export default async function handler(req, res) {
-  // --- CORS HANDLING BLOCK (CRITICAL FIX) ---
-  // Allow requests from your Webflow domain.
-  const allowedOrigin = 'https://starseed-soul-typology-cd638a.webflow.io';
-
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  // Set the specific origin. If you have multiple, you'd check req.headers.origin and conditionally allow it.
-  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization'
-  );
-
-  // Handle preflight request (OPTIONS method) - required for CORS
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  // ------------------------------------------
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-
-  const { orderId } = req.body;
-
-  if (!orderId) {
-    return res.status(400).json({ error: 'Missing orderId in request body' });
-  }
-
-  try {
-    const accessToken = await getAccessToken();
-    const captureData = await captureOrder(orderId, accessToken);
+    const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString('base64');
     
-    // Check for success status from PayPal
-    if (captureData.status === 'COMPLETED') {
-        // SUCCESS! Send the captured data back to the client
-        res.status(200).json(captureData);
-    } else {
-        console.error("PayPal capture status was not COMPLETED:", captureData);
-        // If PayPal returns a 200 but the status isn't COMPLETED, treat it as a server issue
-        res.status(500).json({ error: 'Order processing incomplete.', details: captureData });
+    const tokenResponse = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
+        method: 'POST',
+        body: 'grant_type=client_credentials',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${auth}`,
+        },
+    });
+
+    const tokenData = await tokenResponse.json();
+    
+    if (!tokenData.access_token) {
+        console.error("Token generation failed:", tokenData);
+        throw new Error("PayPal token could not be retrieved.");
+    }
+    return tokenData.access_token;
+}
+
+// --- Main Handler ---
+module.exports = async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+
+    if (req.method !== 'POST') {
+        return res.status(405).json({ status: 'ERROR', message: 'Method Not Allowed' });
     }
 
-  } catch (error) {
-    console.error('API Error during PayPal transaction:', error);
-    // Send a generic 500 status for any internal error
-    res.status(500).json({ 
-        error: 'Failed to capture order.',
-        message: error.message || 'Unknown server error during capture process.'
-    });
-  }
-}
+    const { orderID } = req.body;
+
+    if (!orderID) {
+        // HTTP 400: Bad Request
+        return res.status(400).json({ status: 'ERROR', message: 'Missing PayPal orderID in request body.' });
+    }
+
+    let accessToken;
+    try {
+        accessToken = await generateAccessToken();
+    } catch (e) {
+        // HTTP 500: Internal Server Error (Auth failed)
+        console.error("CRITICAL: PayPal token failure", e.message);
+        return res.status(500).json({ status: 'ERROR', message: 'Internal Server Error: Failed to authenticate with PayPal.' });
+    }
+
+    try {
+        // 1. Capture the Payment
+        const captureResponse = await fetch(
+            `${PAYPAL_API_BASE}/v2/checkout/orders/${orderID}/capture`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${accessToken}`,
+                },
+            }
+        );
+
+        const captureDetails = await captureResponse.json();
+
+        // 2. Check for PayPal API errors (Crucial for debugging the previous 400)
+        if (!captureResponse.ok) {
+            console.error(`[PAYPAL API ERROR] Capture failed. Status: ${captureResponse.status}. Details:`, captureDetails);
+            // Return the PayPal status code (e.g., 400 or 422) to the client
+            return res.status(captureResponse.status).json({ 
+                status: captureDetails.name || 'FAILED', 
+                message: `PayPal API rejected the capture request: ${captureDetails.message}` 
+            });
+        }
+
+        // 3. Successful Capture Status Check
+        if (captureDetails.status === 'COMPLETED' || captureDetails.status === 'CAPTURED') {
+            
+            // --- SUCCESS CRITERIA MET: Add your fulfillment logic here ---
+            // Securely update your database to fulfill the order.
+            
+            console.log(`[VERCEL SUCCESS] Payment confirmed for PayPal Order: ${orderID}. Status: ${captureDetails.status}`);
+
+            // Return HTTP 200: This is the required signal for the client-side redirect.
+            return res.status(200).json({
+                status: captureDetails.status 
+            });
+
+        } else {
+            // Failure: Payment status is pending, voided, etc.
+            console.error(`[VERCEL WARNING] Order ${orderID} status is not COMPLETED/CAPTURED: ${captureDetails.status}`);
+            // Return HTTP 400: Tells the client to redirect to the failure page.
+            return res.status(400).json({
+                status: captureDetails.status,
+                message: 'Payment status is not complete (e.g., PENDING or VOIDED).'
+            });
+        }
+
+    } catch (error) {
+        console.error('CRITICAL: Unhandled error during capture process:', error);
+        // HTTP 500: Unhandled network or code error
+        return res.status(500).json({ status: 'ERROR', message: 'Unknown server error during capture.' });
+    }
+};
