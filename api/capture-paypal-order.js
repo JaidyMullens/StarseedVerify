@@ -1,7 +1,7 @@
 // Vercel Serverless Function: /api/capture-paypal-order
-// This script handles the server-side PayPal Capture API call and status check.
 
-const fetch = require('node-fetch');
+// We use 'node-fetch' for compatibility, although 'fetch' is usually global in Node 18+.
+import fetch from 'node-fetch'; 
 
 // --- Configuration ---
 // These MUST be set as environment variables on your Vercel deployment.
@@ -16,6 +16,7 @@ async function generateAccessToken() {
         throw new Error("Missing PayPal credentials in environment variables.");
     }
 
+    // Access Buffer as a global object
     const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString('base64');
     
     const tokenResponse = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
@@ -36,8 +37,8 @@ async function generateAccessToken() {
     return tokenData.access_token;
 }
 
-// --- Main Handler ---
-module.exports = async (req, res) => {
+// --- Main Handler (using ES Module export syntax) ---
+export default async (req, res) => { // Use 'export default' instead of 'module.exports'
     res.setHeader('Content-Type', 'application/json');
 
     if (req.method !== 'POST') {
@@ -74,7 +75,7 @@ module.exports = async (req, res) => {
 
         const captureDetails = await captureResponse.json();
 
-        // 2. Check for PayPal API errors (Crucial for debugging the previous 400)
+        // 2. Check for PayPal API errors 
         if (!captureResponse.ok) {
             console.error(`[PAYPAL API ERROR] Capture failed. Status: ${captureResponse.status}. Details:`, captureDetails);
             // Return the PayPal status code (e.g., 400 or 422) to the client
