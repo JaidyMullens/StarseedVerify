@@ -3,7 +3,7 @@
 import fetch from "node-fetch";
 
 // Ensure these are correctly set as Vercel Environment Variables
-const PAYPAL_BASE = process.env.PAYPAL_BASE;
+const PAYPAL_BASE = process.env.PAYPAL_BASE || "https://api-m.paypal.com";
 const PAYPAL_CLIENT = process.env.PAYPAL_CLIENT;
 const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
 
