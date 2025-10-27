@@ -1,60 +1,118 @@
-// /api/capture-paypal-order.js - AGGRESSIVELY OPTIMIZED FOR SPEED
+// Vercel serverless functions are best written using ES Modules (ESM) syntax.
+// We must replace 'require' with 'import' and 'module.exports = handler' with 'export default handler'.
 
-import fetch from "node-fetch";
+// NOTE: Modern Node.js environments (like Vercel) have the 'fetch' API built-in,
+// so you don't need to import 'node-fetch' anymore.
 
-// NOTE: Ensure your getAccessToken() function uses the global variable caching 
-// pattern discussed previously. If it doesn't, this optimization won't work!
-// The necessary global variables (cachedToken, tokenExpiry) and logic must be defined
-// outside the handler and inside getAccessToken, respectively.
+// --- 1. Replace require() with import ---
+// Assuming these constants were previously defined and exported from a config file
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
+const PAYPAL_API_BASE = process.env.NODE_ENV === 'production'
+    ? "https://api.paypal.com"
+    : "https://api.sandbox.paypal.com";
 
-// Assuming the getAccessToken() implementation is cached and fast:
+/**
+ * Generates an OAuth 2.0 access token for the PayPal API.
+ * This is the function where the error was pointing to (line 17)
+ */
 async function getAccessToken() {
-    // ... (Your token caching logic goes here) ...
-    // Since I don't have the context of the global variables defined outside the handler 
-    // in this file, you MUST ensure they are defined in your Vercel file.
-    // I am assuming the successful, cached token is returned here:
-    // This call must resolve in < 500ms for subsequent requests.
-    return require('./auth-token-service').getToken(); // Hypothetical fast fetch
-}
-
-export default async function handler(req, res) {
-    // Standard CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "https://starseed-soul-typology-cd638a.webflow.io");
-    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-    if (req.method === "OPTIONS") {
-        return res.status(200).end();
-    }
-
+    // Basic Auth header requires Base64 encoding of Client ID and Secret
+    const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString('base64');
+    
     try {
-        const { orderID } = req.body; 
+        const response = await fetch(`${PAYPAL_API_BASE}/v1/oauth2/token`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": `Basic ${auth}`,
+            },
+            body: "grant_type=client_credentials",
+        });
 
-        if (!orderID) {
-            return res.status(400).json({ error: "Missing orderID" });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to get PayPal Access Token. Status: ${response.status}, Details: ${errorText}`);
         }
 
-        const token = await getAccessToken(); 
+        const data = await response.json();
+        return data.access_token;
 
-        // 1. Fetch PayPal Capture API
-        const response = await fetch(`https://api-m.paypal.com/v2/checkout/orders/${orderID}/capture`, {
+    } catch (error) {
+        console.error("Error generating access token:", error.message);
+        throw error;
+    }
+}
+
+/**
+ * Captures an existing PayPal order using the provided order ID.
+ * @param {string} orderId - The ID of the order to capture.
+ * @returns {object} The captured order details.
+ */
+async function captureOrder(orderId) {
+    const accessToken = await getAccessToken();
+
+    try {
+        const response = await fetch(`${PAYPAL_API_BASE}/v2/checkout/orders/${orderId}/capture`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
+                "Authorization": `Bearer ${accessToken}`,
             },
         });
 
-        const order = await response.json();
-        
-        // 2. IMMEDIATE RESPONSE: Use Vercel's 200 status with PayPal's response payload.
-        // This avoids any potential delay from resolving response.status logic.
-        // We let the client (Webflow script) interpret the 'order.status'.
-        return res.status(200).json(order); 
-        
-    } catch (err) {
-        console.error("CAPTURE ERROR:", err);
-        // Ensure error response is fast and simple
-        return res.status(500).json({ error: "Failed to capture PayPal order.", details: err.message });
+        const data = await response.json();
+
+        if (!response.ok) {
+            // PayPal API often returns detailed error objects
+            const details = JSON.stringify(data.details || data, null, 2);
+            throw new Error(`PayPal Capture API Error: ${response.status}. Details: ${details}`);
+        }
+
+        return data;
+    } catch (error) {
+        console.error("Error capturing PayPal order:", error.message);
+        throw error;
     }
 }
+
+/**
+ * The Vercel Serverless Function handler.
+ * @param {object} request - The incoming HTTP request.
+ * @param {object} response - The outgoing HTTP response.
+ */
+async function handler(request, response) {
+    // Only allow POST requests for capturing payments
+    if (request.method !== 'POST') {
+        response.status(405).json({ success: false, message: 'Method Not Allowed. Use POST.' });
+        return;
+    }
+    
+    // Extract the order ID from the request body
+    let orderId;
+    try {
+        orderId = request.body.orderId;
+        if (!orderId) {
+            throw new Error("Missing 'orderId' in request body.");
+        }
+    } catch (e) {
+        response.status(400).json({ success: false, message: e.message });
+        return;
+    }
+
+    try {
+        const captureResult = await captureOrder(orderId);
+        
+        // Respond with success and the captured order data
+        response.status(200).json({ success: true, capture: captureResult });
+
+    } catch (error) {
+        console.error("Capture API execution error:", error.message);
+        // Respond with a 500 error if something went wrong during the capture process
+        response.status(500).json({ success: false, message: error.message });
+    }
+}
+
+// --- 2. Replace module.exports with export default ---
+// This exports the handler function as the default for Vercel to pick up.
+export default handler;
