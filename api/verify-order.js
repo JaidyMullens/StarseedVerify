@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 
 // Using your preferred environment variable names
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+const PAYPAL_CLIENT = process.env.PAYPAL_CLIENT_ID;
 const PAYPAL_SECRET = process.env.PAYPAL_SECRET;
 // Must be set to the Live API endpoint
 const PAYPAL_BASE = 'https://api-m.paypal.com';
